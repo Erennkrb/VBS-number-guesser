@@ -1,60 +1,223 @@
-' --- The Ultimate Number Guessing Game ---
+' === The Ultimate Number Guessing Game v2 ===
 Option Explicit
 
-Dim targetNum, userGuess, attempts, maxAttempts, isGuessed, playAgain
+Dim fso, scoreFile, bestScores
+Dim totalWins, totalLosses, streak, bestStreak, totalPoints
+Dim playAgain
+
+Set fso = CreateObject("Scripting.FileSystemObject")
+Set bestScores = CreateObject("Scripting.Dictionary")
+scoreFile = fso.BuildPath(fso.GetParentFolderName(WScript.ScriptFullName), "guess_highscores.txt")
+
+totalWins = 0
+totalLosses = 0
+streak = 0
+bestStreak = 0
+totalPoints = 0
+
+LoadScores
+
+MsgBox "Welcome to the Number Guessing Game!" & vbCrLf & vbCrLf & _
+       "Pick a difficulty, then find the secret number." & vbCrLf & _
+       "Hints tell you how hot or cold your guess is." & vbCrLf & _
+       "Press Cancel in the guess box to quit a round.", vbInformation, "Number Guessing Game"
 
 Do
-    ' Initialize game variables
+    PlayRound
+    playAgain = MsgBox("Play another round?" & vbCrLf & vbCrLf & StatsText(), vbYesNo + vbQuestion, "Play Again?")
+Loop While playAgain = vbYes
+
+MsgBox "Thanks for playing!" & vbCrLf & vbCrLf & StatsText(), vbInformation, "Goodbye"
+WScript.Quit
+
+' ---------------------------------------------------------------
+
+Sub PlayRound()
+    Dim levelName, lo, hi, maxAttempts, multiplier
+    Dim target, attempts, won, quitRound
+    Dim raw, guess, valid, errMsg, prompt
+    Dim history, diff, span, hint, points, key
+
+    If Not ChooseDifficulty(levelName, lo, hi, maxAttempts, multiplier) Then Exit Sub
+
     Randomize
-    targetNum = Int((100 * Rnd) + 1) ' Random number between 1 and 100
+    target = Int((hi - lo + 1) * Rnd) + lo
+    span = hi - lo + 1
     attempts = 0
-    maxAttempts = 7
-    isGuessed = False
+    won = False
+    quitRound = False
+    history = ""
+    hint = ""
 
-    MsgBox "Welcome to the Number Guessing Game!" & vbCrLf & vbCrLf & _
-           "I have chosen a secret number between 1 and 100." & vbCrLf & _
-           "You have " & maxAttempts & " attempts to guess it. Good luck!", vbInformation, "Game Start"
+    Do While attempts < maxAttempts And Not won And Not quitRound
+        valid = False
+        errMsg = ""
 
-    Do While attempts < maxAttempts And Not isGuessed
-        attempts = attempts + 1
-        
-        userGuess = InputBox("Attempt " & attempts & " of " & maxAttempts & ":" & vbCrLf & vbCrLf & _
-                             "Enter your guess (1 - 100):", "Guess the Number")
-        
-        ' If user clicks Cancel or leaves it empty, exit the game
-        If userGuess = "" Then 
-            MsgBox "Thanks for playing! Goodbye!", vbInformation, "Game Over"
-            WScript.Quit
-        End If
-        
-        ' Validate integer input
-        If IsNumeric(userGuess) Then
-            userGuess = CInt(userGuess)
-            
-            If userGuess = targetNum Then
-                isGuessed = True
-                MsgBox "🎉 Congratulations! You guessed the correct number (" & targetNum & ") in " & attempts & " attempt(s)!", vbInformation, "YOU WIN!"
-            ElseIf userGuess < targetNum Then
-                MsgBox "Too LOW! Try a higher number. 📈" & vbCrLf & _
-                       "Attempts remaining: " & (maxAttempts - attempts), vbExclamation, "Hint"
+        Do Until valid
+            prompt = "Difficulty: " & levelName & "  (" & lo & " to " & hi & ")" & vbCrLf & _
+                     "Attempt " & (attempts + 1) & " of " & maxAttempts & vbCrLf
+            If hint <> "" Then prompt = prompt & vbCrLf & hint & vbCrLf
+            If history <> "" Then prompt = prompt & "Your guesses: " & history & vbCrLf
+            If errMsg <> "" Then prompt = prompt & vbCrLf & "! " & errMsg & vbCrLf
+            prompt = prompt & vbCrLf & "Enter your guess:"
+
+            raw = Trim(InputBox(prompt, "Guess the Number"))
+
+            If raw = "" Then
+                If MsgBox("Give up this round?", vbYesNo + vbQuestion, "Quit round") = vbYes Then
+                    quitRound = True
+                    valid = True
+                End If
+            ElseIf Not IsNumeric(raw) Then
+                errMsg = "That is not a number."
+            ElseIf CDbl(raw) <> Int(CDbl(raw)) Then
+                errMsg = "Whole numbers only."
             Else
-                MsgBox "Too HIGH! Try a lower number. 📉" & vbCrLf & _
-                       "Attempts remaining: " & (maxAttempts - attempts), vbExclamation, "Hint"
+                guess = CLng(raw)
+                If guess < lo Or guess > hi Then
+                    errMsg = "Stay between " & lo & " and " & hi & "."
+                ElseIf InStr("," & Replace(history, " ", "") & ",", "," & guess & ",") > 0 Then
+                    errMsg = "You already tried " & guess & "."
+                Else
+                    valid = True
+                End If
             End If
-        Else
-            MsgBox "Please enter a valid number!", vbCritical, "Error"
-            attempts = attempts - 1 ' Don't penalize for invalid input
+        Loop
+
+        If Not quitRound Then
+            attempts = attempts + 1
+            If history <> "" Then history = history & ", "
+            history = history & guess
+
+            If guess = target Then
+                won = True
+            Else
+                diff = Abs(guess - target)
+                If diff <= span * 0.03 Then
+                    hint = "BURNING HOT"
+                ElseIf diff <= span * 0.1 Then
+                    hint = "Hot"
+                ElseIf diff <= span * 0.25 Then
+                    hint = "Warm"
+                Else
+                    hint = "Cold"
+                End If
+                If guess < target Then
+                    hint = hint & " - go HIGHER"
+                Else
+                    hint = hint & " - go LOWER"
+                End If
+            End If
         End If
     Loop
 
-    If Not isGuessed Then
-        MsgBox "💥 Game Over! You ran out of attempts." & vbCrLf & _
-               "The secret number was " & targetNum & ".", vbCritical, "Out of Turns"
+    If won Then
+        points = (maxAttempts - attempts + 1) * 100 * multiplier
+        totalPoints = totalPoints + points
+        totalWins = totalWins + 1
+        streak = streak + 1
+        If streak > bestStreak Then bestStreak = streak
+
+        key = levelName
+        Dim msg, isRecord
+        isRecord = False
+        If Not bestScores.Exists(key) Then
+            isRecord = True
+        ElseIf attempts < bestScores(key) Then
+            isRecord = True
+        End If
+        If isRecord Then
+            bestScores(key) = attempts
+            SaveScores
+        End If
+
+        msg = "YOU WIN!" & vbCrLf & vbCrLf & _
+              "The number was " & target & "." & vbCrLf & _
+              "Solved in " & attempts & " attempt(s)." & vbCrLf & _
+              "Points earned: " & points
+        If isRecord Then msg = msg & vbCrLf & vbCrLf & "NEW PERSONAL BEST on " & levelName & "!"
+        MsgBox msg, vbInformation, "Victory"
+    ElseIf quitRound Then
+        streak = 0
+        MsgBox "Round abandoned." & vbCrLf & "The number was " & target & ".", vbExclamation, "Round Over"
+    Else
+        totalLosses = totalLosses + 1
+        streak = 0
+        MsgBox "Game Over, out of attempts." & vbCrLf & vbCrLf & _
+               "The secret number was " & target & ".", vbCritical, "Out of Turns"
     End If
+End Sub
 
-    ' Ask to play again
-    playAgain = MsgBox("Do you want to play another round?", vbYesNo + vbQuestion, "Play Again?")
+Function ChooseDifficulty(ByRef levelName, ByRef lo, ByRef hi, ByRef maxAttempts, ByRef multiplier)
+    Dim choice, menu
+    ChooseDifficulty = False
 
-Loop While playAgain = vbYes
+    Do
+        menu = "Choose a difficulty:" & vbCrLf & vbCrLf & _
+               "1  Easy     (1 to 50, 10 attempts)" & BestText("Easy") & vbCrLf & _
+               "2  Normal   (1 to 100, 7 attempts)" & BestText("Normal") & vbCrLf & _
+               "3  Hard     (1 to 500, 9 attempts)" & BestText("Hard") & vbCrLf & _
+               "4  Insane   (1 to 1000, 10 attempts)" & BestText("Insane") & vbCrLf & vbCrLf & _
+               "Enter 1, 2, 3 or 4:"
 
-MsgBox "Thanks for playing! See you next time.", vbInformation, "Goodbye"
+        choice = Trim(InputBox(menu, "Difficulty", "2"))
+        If choice = "" Then Exit Function
+
+        Select Case choice
+            Case "1": levelName = "Easy":   lo = 1: hi = 50:   maxAttempts = 10: multiplier = 1: ChooseDifficulty = True
+            Case "2": levelName = "Normal": lo = 1: hi = 100:  maxAttempts = 7:  multiplier = 2: ChooseDifficulty = True
+            Case "3": levelName = "Hard":   lo = 1: hi = 500:  maxAttempts = 9:  multiplier = 3: ChooseDifficulty = True
+            Case "4": levelName = "Insane": lo = 1: hi = 1000: maxAttempts = 10: multiplier = 5: ChooseDifficulty = True
+            Case Else: MsgBox "Please enter 1, 2, 3 or 4.", vbExclamation, "Invalid choice"
+        End Select
+    Loop Until ChooseDifficulty
+End Function
+
+Function BestText(levelName)
+    If bestScores.Exists(levelName) Then
+        BestText = "   [best: " & bestScores(levelName) & "]"
+    Else
+        BestText = ""
+    End If
+End Function
+
+Function StatsText()
+    StatsText = "Wins: " & totalWins & "   Losses: " & totalLosses & vbCrLf & _
+                "Current streak: " & streak & "   Best streak: " & bestStreak & vbCrLf & _
+                "Total points: " & totalPoints
+End Function
+
+Sub LoadScores()
+    Dim f, line, parts
+    If Not fso.FileExists(scoreFile) Then Exit Sub
+    On Error Resume Next
+    Set f = fso.OpenTextFile(scoreFile, 1)
+    If Err.Number <> 0 Then
+        Err.Clear
+        Exit Sub
+    End If
+    Do While Not f.AtEndOfStream
+        line = f.ReadLine
+        parts = Split(line, "=")
+        If UBound(parts) = 1 Then
+            If IsNumeric(parts(1)) Then bestScores(parts(0)) = CLng(parts(1))
+        End If
+    Loop
+    f.Close
+    On Error GoTo 0
+End Sub
+
+Sub SaveScores()
+    Dim f, k
+    On Error Resume Next
+    Set f = fso.CreateTextFile(scoreFile, True)
+    If Err.Number <> 0 Then
+        Err.Clear
+        Exit Sub
+    End If
+    For Each k In bestScores.Keys
+        f.WriteLine k & "=" & bestScores(k)
+    Next
+    f.Close
+    On Error GoTo 0
+End Sub
